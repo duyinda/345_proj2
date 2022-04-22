@@ -24,6 +24,9 @@ type Simulator struct {
 	servers        map[string]*Server // key = server ID
 	logger         *Logger
 	// TODO: ADD MORE FIELDS HERE
+	chanMap     map[int]chan *SnapshotState // snapshotID -> state from servers
+	finishedMap map[int]int                 // snapshotID -> number of servers that have finished
+	stopMap     map[int]chan bool           // snapshotID -> signal
 }
 
 func NewSimulator() *Simulator {
@@ -32,6 +35,9 @@ func NewSimulator() *Simulator {
 		0,
 		make(map[string]*Server),
 		NewLogger(),
+		make(map[int]chan *SnapshotState),
+		make(map[int]int),
+		make(map[int]chan bool),
 	}
 }
 
@@ -108,6 +114,8 @@ func (sim *Simulator) StartSnapshot(serverId string) {
 	sim.nextSnapshotId++
 	sim.logger.RecordEvent(sim.servers[serverId], StartSnapshot{serverId, snapshotId})
 	// TODO: IMPLEMENT ME
+	sim.servers[serverId].StartSnapshot(snapshotId)
+	sim.chanMap[snapshotId] = make(chan *SnapshotState, len(sim.servers))
 }
 
 // Callback for servers to notify the simulator that the snapshot process has
@@ -115,12 +123,27 @@ func (sim *Simulator) StartSnapshot(serverId string) {
 func (sim *Simulator) NotifySnapshotComplete(serverId string, snapshotId int) {
 	sim.logger.RecordEvent(sim.servers[serverId], EndSnapshot{serverId, snapshotId})
 	// TODO: IMPLEMENT ME
+	sim.finishedMap[snapshotId]++
 }
 
 // Collect and merge snapshot state from all the servers.
 // This function blocks until the snapshot process has completed on all servers.
 func (sim *Simulator) CollectSnapshot(snapshotId int) *SnapshotState {
 	// TODO: IMPLEMENT ME
-	snap := SnapshotState{snapshotId, make(map[string]int), make([]*SnapshotMessage, 0)}
-	return &snap
+	tk := make(map[string]int)
+	msg := make([]*SnapshotMessage, 0)
+	for {
+		select {
+		case rec := <-sim.chanMap[snapshotId]:
+			for k, v := range rec.tokens {
+				tk[k] += v
+			}
+			for _, v := range rec.messages {
+				msg = append(msg, v)
+			}
+		case _ = <-sim.stopMap[snapshotId]:
+			snap := SnapshotState{snapshotId, tk, msg}
+			return &snap
+		}
+	}
 }

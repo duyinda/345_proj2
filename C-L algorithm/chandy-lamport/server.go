@@ -14,6 +14,7 @@ type Server struct {
 	outboundLinks map[string]*Link // key = link.dest
 	inboundLinks  map[string]*Link // key = link.src
 	// TODO: ADD MORE FIELDS HERE
+	receivedSnapshot map[int]bool // snapshotID -> already received snapshot
 }
 
 // A unidirectional communication channel between two servers
@@ -31,6 +32,7 @@ func NewServer(id string, tokens int, sim *Simulator) *Server {
 		sim,
 		make(map[string]*Link),
 		make(map[string]*Link),
+		make(map[int]bool),
 	}
 }
 
@@ -85,10 +87,52 @@ func (server *Server) SendTokens(numTokens int, dest string) {
 // should notify the simulator by calling `sim.NotifySnapshotComplete`.
 func (server *Server) HandlePacket(src string, message interface{}) {
 	// TODO: IMPLEMENT ME
+	switch v := message.(type) {
+	case MarkerMessage:
+		if !server.receivedSnapshot[v.snapshotId] {
+			snapshotId := v.snapshotId
+			server.receivedSnapshot[snapshotId] = true
+			for _, v := range server.outboundLinks {
+				v.events.Push(MarkerMessage{snapshotId: snapshotId})
+			}
+
+			server.sim.chanMap[snapshotId] <- &SnapshotState{
+				id:       snapshotId,
+				tokens:   map[string]int{server.Id: server.Tokens},
+				messages: nil,
+			}
+			server.sim.NotifySnapshotComplete(server.Id, snapshotId)
+		}
+	case TokenMessage:
+		for snapshotId, received := range server.receivedSnapshot {
+			if received {
+				server.sim.chanMap[snapshotId] <- &SnapshotState{
+					id:     snapshotId,
+					tokens: nil,
+					messages: []*SnapshotMessage{{
+						src:     src,
+						dest:    server.Id,
+						message: message,
+					}},
+				}
+			}
+		}
+		server.Tokens += v.numTokens
+	}
 }
 
 // Start the chandy-lamport snapshot algorithm on this server.
 // This should be called only once per server.
 func (server *Server) StartSnapshot(snapshotId int) {
 	// TODO: IMPLEMENT ME
+	for _, v := range server.outboundLinks {
+		v.events.Push(MarkerMessage{snapshotId: snapshotId})
+	}
+
+	server.sim.chanMap[snapshotId] <- &SnapshotState{
+		id:       snapshotId,
+		tokens:   map[string]int{server.Id: server.Tokens},
+		messages: nil,
+	}
+	server.sim.NotifySnapshotComplete(server.Id, snapshotId)
 }
