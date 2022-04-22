@@ -14,7 +14,9 @@ type Server struct {
 	outboundLinks map[string]*Link // key = link.dest
 	inboundLinks  map[string]*Link // key = link.src
 	// TODO: ADD MORE FIELDS HERE
-	receivedSnapshot map[int]bool // snapshotID -> already received snapshot
+	receivedSnapshot map[int]bool            // snapshotID -> if received snapshot
+	inReceivedMarker map[int]map[string]bool // snapshotID -> src -> if received marker
+	snapshot         map[int]*SnapshotState  // snapshotID -> state
 }
 
 // A unidirectional communication channel between two servers
@@ -33,6 +35,8 @@ func NewServer(id string, tokens int, sim *Simulator) *Server {
 		make(map[string]*Link),
 		make(map[string]*Link),
 		make(map[int]bool),
+		make(map[int]map[string]bool),
+		make(map[int]*SnapshotState),
 	}
 }
 
@@ -90,31 +94,24 @@ func (server *Server) HandlePacket(src string, message interface{}) {
 	switch v := message.(type) {
 	case MarkerMessage:
 		if !server.receivedSnapshot[v.snapshotId] {
-			snapshotId := v.snapshotId
-			server.receivedSnapshot[snapshotId] = true
-			for _, v := range server.outboundLinks {
-				v.events.Push(MarkerMessage{snapshotId: snapshotId})
-			}
-
-			server.sim.chanMap[snapshotId] <- &SnapshotState{
-				id:       snapshotId,
-				tokens:   map[string]int{server.Id: server.Tokens},
-				messages: nil,
-			}
-			server.sim.NotifySnapshotComplete(server.Id, snapshotId)
+			server.StartSnapshot(v.snapshotId)
+		}
+		if !server.inReceivedMarker[v.snapshotId][src] {
+			server.inReceivedMarker[v.snapshotId][src] = true
+		}
+		if len(server.inReceivedMarker[v.snapshotId]) == len(server.inboundLinks) {
+			server.sim.chanMap[v.snapshotId] <- server.snapshot[v.snapshotId]
+			server.sim.NotifySnapshotComplete(server.Id, v.snapshotId)
 		}
 	case TokenMessage:
 		for snapshotId, received := range server.receivedSnapshot {
-			if received {
-				server.sim.chanMap[snapshotId] <- &SnapshotState{
-					id:     snapshotId,
-					tokens: nil,
-					messages: []*SnapshotMessage{{
+			if received && !server.inReceivedMarker[snapshotId][src] {
+				server.snapshot[snapshotId].messages =
+					append(server.snapshot[snapshotId].messages, &SnapshotMessage{
 						src:     src,
 						dest:    server.Id,
 						message: message,
-					}},
-				}
+					})
 			}
 		}
 		server.Tokens += v.numTokens
@@ -125,14 +122,12 @@ func (server *Server) HandlePacket(src string, message interface{}) {
 // This should be called only once per server.
 func (server *Server) StartSnapshot(snapshotId int) {
 	// TODO: IMPLEMENT ME
-	for _, v := range server.outboundLinks {
-		v.events.Push(MarkerMessage{snapshotId: snapshotId})
-	}
-
-	server.sim.chanMap[snapshotId] <- &SnapshotState{
+	server.inReceivedMarker[snapshotId] = make(map[string]bool)
+	server.receivedSnapshot[snapshotId] = true
+	server.snapshot[snapshotId] = &SnapshotState{
 		id:       snapshotId,
 		tokens:   map[string]int{server.Id: server.Tokens},
-		messages: nil,
+		messages: make([]*SnapshotMessage, 0),
 	}
-	server.sim.NotifySnapshotComplete(server.Id, snapshotId)
+	server.SendToNeighbors(MarkerMessage{snapshotId: snapshotId})
 }

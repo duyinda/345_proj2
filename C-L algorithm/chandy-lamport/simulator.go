@@ -114,8 +114,9 @@ func (sim *Simulator) StartSnapshot(serverId string) {
 	sim.nextSnapshotId++
 	sim.logger.RecordEvent(sim.servers[serverId], StartSnapshot{serverId, snapshotId})
 	// TODO: IMPLEMENT ME
-	sim.servers[serverId].StartSnapshot(snapshotId)
 	sim.chanMap[snapshotId] = make(chan *SnapshotState, len(sim.servers))
+	sim.stopMap[snapshotId] = make(chan bool, 1)
+	sim.servers[serverId].StartSnapshot(snapshotId)
 }
 
 // Callback for servers to notify the simulator that the snapshot process has
@@ -132,6 +133,7 @@ func (sim *Simulator) CollectSnapshot(snapshotId int) *SnapshotState {
 	// TODO: IMPLEMENT ME
 	tk := make(map[string]int)
 	msg := make([]*SnapshotMessage, 0)
+	cnt := 0
 	for {
 		select {
 		case rec := <-sim.chanMap[snapshotId]:
@@ -141,9 +143,11 @@ func (sim *Simulator) CollectSnapshot(snapshotId int) *SnapshotState {
 			for _, v := range rec.messages {
 				msg = append(msg, v)
 			}
-		case _ = <-sim.stopMap[snapshotId]:
-			snap := SnapshotState{snapshotId, tk, msg}
-			return &snap
+			cnt++
+			if cnt == len(sim.servers) {
+				snap := SnapshotState{snapshotId, tk, msg}
+				return &snap
+			}
 		}
 	}
 }
